@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "rbchat",
+  "version": "0.1.0",
+  "name": "Right Bottom Chat",
+  "description": "필요 없는 채팅을 오른쪽 하단 HUD로 보내고 메인 채팅창에서는 숨깁니다.",
+  "authors": ["young"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [ "com.example.rbchat.RBChatClient" ],
+    "modmenu": [ "com.example.rbchat.ModMenuIntegration" ]
+  },
+  "icon": "assets/rbchat/icon.png",
+  "depends": {
+    "fabricloader": ">=0.15.6",
+    "fabric": "*",
+    "minecraft": "1.20.1"
+  },
+  "suggests": {
+    "modmenu": "*"
+  },
+  "contact": {
+    "homepage": "https://example.com/rbchat",
+    "sources": "https://github.com/yourname/rbchat",
+    "issues": "https://github.com/yourname/rbchat/issues"
+  }
+}

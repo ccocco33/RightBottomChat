@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "fontScale": 0.9,
+  "bgEnabled": false,
+  "bgOpacityPercent": 30,
+  "maxVisible": 10,
+  "displayMillis": 3000,
+  "systemPatterns": [
+    "획득했습니다"
+  ],
+  "allowPatterns": [
+    "님께서"
+  ]
+}

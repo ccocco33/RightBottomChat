@@ -1,0 +1,5 @@
+{
+  "modmenu.descriptionTranslation.rbchat": "Filters noisy messages to a right-bottom HUD and hides them from main chat.",
+  "key.categories.rbchat": "RBChat",
+  "key.rbchat.open_config": "Open RBChat Config"
+}
