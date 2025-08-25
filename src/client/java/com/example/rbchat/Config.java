@@ -5,162 +5,182 @@ import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
+import java.util.regex.Pattern;
 
-/**
- * 설정: 모드 ON/OFF, 폰트 스케일(슬라이더), 배경 ON/OFF, 배경 투명도(슬라이더),
- * 표시 개수/지속시간, 패턴(system/allow)
- */
 public class Config {
-    public static boolean enabled;           // 모드 ON/OFF
-    public static float   fontScale;         // 0.60 ~ 1.20
-    public static boolean bgEnabled;         // HUD 배경
-    public static int     bgOpacityPercent;  // 0 ~ 100
-
-    public static int     maxVisible;        // 최대 표시 줄
-    public static int     displayMillis;     // 표시 시간(ms)
-
-    public static List<String> systemPatterns; // 숨길(필터) 패턴
-    public static List<String> allowPatterns;  // 허용(화이트리스트) 패턴
-
-    private static final Path CONFIG_PATH =
-            FabricLoader.getInstance().getConfigDir().resolve("rbchat.json");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final Path CONFIG_PATH = FabricLoader.getInstance().getConfigDir().resolve("rbchat.json");
 
-    public static void load() {
-        try {
-            if (Files.exists(CONFIG_PATH)) {
-                String json = Files.readString(CONFIG_PATH, StandardCharsets.UTF_8);
-                Data d = GSON.fromJson(json, Data.class);
-                if (d != null) {
-                    Data def = defaults();
+    /* ===== 사용자 설정 값들 ===== */
+    public static boolean enabled = true;
 
-                    enabled           = (d.enabled);
-                    fontScale         = clampf(nullTo(d.fontScale, def.fontScale), 0.60f, 1.20f);
-                    bgEnabled         = (d.bgEnabled);
-                    bgOpacityPercent  = clamp(nullTo(d.bgOpacityPercent, def.bgOpacityPercent), 0, 100);
+    public static float  fontScale        = 0.90f; // 0.6 ~ 1.2
+    public static boolean bgEnabled       = true;
+    public static int    bgOpacityPercent = 30;    // 0~100
 
-                    maxVisible        = Math.max(1, nullTo(d.maxVisible, def.maxVisible));
-                    displayMillis     = Math.max(100, nullTo(d.displayMillis, def.displayMillis));
+    public static int    maxVisible    = 10;       // 1~40
+    public static int    displayMillis = 3000;     // 500~20000
 
-                    systemPatterns    = pick(d.systemPatterns, def.systemPatterns);
-                    allowPatterns     = pick(d.allowPatterns,  def.allowPatterns);
-                    return;
-                }
-            }
-            // 파일 없거나 파싱 실패 → 기본값 저장
-            apply(defaults());
-            saveCurrent();
-        } catch (Exception e) {
-            apply(defaults());
-        }
+    // 오버레이 위치/여백
+    public static int offsetX = 0;   // px
+    public static int offsetY = 0;   // px
+    public static int edgePadding = 8; // px (이전 safePadding 대체) 0~32 권장
+
+    // 패턴
+    public static List<String> systemPatterns = new ArrayList<>(List.of(
+            "획득했습니다",         // 예: "마나 140.0 를 획득했습니다!"
+            "후 사용할 수 있습니다",   // 예: "[얼음길] 6.799 후 사용할 수 있습니다."
+            "포인트 \\+"            // 예: "생활랭킹 포인트 +10.0"
+    ));
+    public static List<String> allowPatterns = new ArrayList<>(List.of(
+            "님께서"               // “~님께서”가 들어가면 허용
+    ));
+
+    /* ===== 정규식 캐시 & 오류 인덱스 ===== */
+    private static List<Pattern> compiledSystem = new ArrayList<>();
+    private static List<Pattern> compiledAllow  = new ArrayList<>();
+    public  static Set<Integer> invalidSystemIdx = new HashSet<>();
+    public  static Set<Integer> invalidAllowIdx  = new HashSet<>();
+
+    /* ===== 직렬화용 DTO ===== */
+    private static class DTO {
+        boolean enabled;
+        float fontScale;
+        boolean bgEnabled;
+        int bgOpacityPercent;
+        int maxVisible;
+        int displayMillis;
+        int offsetX, offsetY;
+        int edgePadding;
+        List<String> systemPatterns;
+        List<String> allowPatterns;
     }
 
+    /* ====== 기본값 ====== */
+    public static void resetToDefaults() {
+        enabled = true;
+        fontScale = 0.90f;
+        bgEnabled = true;
+        bgOpacityPercent = 30;
+        maxVisible = 10;
+        displayMillis = 3000;
+        offsetX = 0;
+        offsetY = 0;
+        edgePadding = 8;
+
+        systemPatterns = new ArrayList<>(List.of(
+                "획득했습니다",
+                "후 사용할 수 있습니다",
+                "포인트 \\+"
+        ));
+        allowPatterns = new ArrayList<>(List.of("님께서"));
+
+        compilePatternsFromCurrent();
+    }
+
+    /* ====== 파일 저장/로드 ====== */
     public static void saveCurrent() {
         try {
-            Data d = new Data();
-            d.enabled          = enabled;
-            d.fontScale        = fontScale;
-            d.bgEnabled        = bgEnabled;
-            d.bgOpacityPercent = bgOpacityPercent;
+            DTO dto = new DTO();
+            dto.enabled = enabled;
+            dto.fontScale = fontScale;
+            dto.bgEnabled = bgEnabled;
+            dto.bgOpacityPercent = bgOpacityPercent;
+            dto.maxVisible = maxVisible;
+            dto.displayMillis = displayMillis;
+            dto.offsetX = offsetX;
+            dto.offsetY = offsetY;
+            dto.edgePadding = edgePadding;
+            dto.systemPatterns = new ArrayList<>(systemPatterns);
+            dto.allowPatterns = new ArrayList<>(allowPatterns);
 
-            d.maxVisible       = maxVisible;
-            d.displayMillis    = displayMillis;
-
-            d.systemPatterns   = systemPatterns;
-            d.allowPatterns    = allowPatterns;
-
-            Files.writeString(
-                    CONFIG_PATH,
-                    GSON.toJson(d),
-                    StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING
-            );
-        } catch (IOException ignored) {}
+            Files.createDirectories(CONFIG_PATH.getParent());
+            Files.writeString(CONFIG_PATH, GSON.toJson(dto));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
-    /** 메시지를 숨길지 판단: allow(화이트) 우선, 그 다음 system(블랙) */
-    public static boolean shouldHide(String text) {
-        if (!enabled) return false;
-        if (text == null || text.isEmpty()) return false;
-
-        String norm = text.replaceAll("\\p{Cntrl}", "").trim();
-
-        // 화이트리스트에 하나라도 포함되면 숨기지 않음
-        for (String p : allowPatterns) {
-            if (!p.isEmpty() && norm.contains(p)) return false;
+    public static void loadOrDefaults() {
+        if (!Files.exists(CONFIG_PATH)) {
+            resetToDefaults();
+            saveCurrent();
+            return;
         }
-        // 블랙리스트에 하나라도 포함되면 숨김
-        for (String p : systemPatterns) {
-            if (!p.isEmpty() && norm.contains(p)) return true;
+        try {
+            String json = Files.readString(CONFIG_PATH);
+            DTO dto = GSON.fromJson(json, DTO.class);
+            if (dto == null) { resetToDefaults(); return; }
+
+            enabled = dto.enabled;
+            fontScale = clamp(dto.fontScale, 0.60f, 1.20f);
+            bgEnabled = dto.bgEnabled;
+            bgOpacityPercent = clamp(dto.bgOpacityPercent, 0, 100);
+            maxVisible = clamp(dto.maxVisible, 1, 40);
+            displayMillis = clamp(dto.displayMillis, 500, 20000);
+            offsetX = clamp(dto.offsetX, 0, 400);
+            offsetY = clamp(dto.offsetY, 0, 400);
+            edgePadding = clamp(dto.edgePadding, 0, 64);
+
+            systemPatterns = dto.systemPatterns != null ? new ArrayList<>(dto.systemPatterns) : new ArrayList<>();
+            allowPatterns  = dto.allowPatterns  != null ? new ArrayList<>(dto.allowPatterns)  : new ArrayList<>();
+
+            compilePatternsFromCurrent();
+        } catch (Exception e) {
+            e.printStackTrace();
+            resetToDefaults();
+        }
+    }
+
+    private static int clamp(int v, int min, int max) { return Math.max(min, Math.min(max, v)); }
+    private static float clamp(float v, float min, float max) { return Math.max(min, Math.min(max, v)); }
+
+    /* ===== 정규식 컴파일 & 오류 인덱스 표기 ===== */
+    public static void compilePatternsFromCurrent() {
+        compiledSystem = new ArrayList<>();
+        compiledAllow  = new ArrayList<>();
+        invalidSystemIdx.clear();
+        invalidAllowIdx.clear();
+
+        for (int i = 0; i < systemPatterns.size(); i++) {
+            String s = systemPatterns.get(i);
+            try {
+                compiledSystem.add(Pattern.compile(s));
+            } catch (Exception ex) {
+                invalidSystemIdx.add(i);
+            }
+        }
+        for (int i = 0; i < allowPatterns.size(); i++) {
+            String s = allowPatterns.get(i);
+            try {
+                compiledAllow.add(Pattern.compile(s));
+            } catch (Exception ex) {
+                invalidAllowIdx.add(i);
+            }
+        }
+    }
+
+    /* ===== 메시지 필터 =====
+       - 허용 패턴이 우선 -> false
+       - 그 다음 시스템(숨김) 패턴 -> true
+    */
+    public static boolean shouldHide(String plain) {
+        if (!enabled) return false;
+
+        for (Pattern p : compiledAllow) {
+            try { if (p.matcher(plain).find()) return false; } catch (Exception ignored) {}
+        }
+        for (Pattern p : compiledSystem) {
+            try { if (p.matcher(plain).find()) return true; } catch (Exception ignored) {}
         }
         return false;
     }
 
-    public static int getBgArgb() {
-        int a = (int) Math.round(255 * (bgOpacityPercent / 100.0));
-        return ((a & 0xFF) << 24) | 0x000000; // 검정 배경
-    }
-
-    // -------- 내부 유틸/기본값 --------
-
-    private static void apply(Data d) {
-        enabled          = d.enabled;
-        fontScale        = d.fontScale;
-        bgEnabled        = d.bgEnabled;
-        bgOpacityPercent = d.bgOpacityPercent;
-
-        maxVisible       = d.maxVisible;
-        displayMillis    = d.displayMillis;
-
-        systemPatterns   = d.systemPatterns;
-        allowPatterns    = d.allowPatterns;
-    }
-
-    private static Data defaults() {
-        Data d = new Data();
-        d.enabled          = true;
-        d.fontScale        = 0.90f;
-        d.bgEnabled        = false;
-        d.bgOpacityPercent = 30;
-
-        d.maxVisible       = 10;
-        d.displayMillis    = 3000;
-
-        d.systemPatterns = new ArrayList<>(Arrays.asList(
-                "획득했습니다",
-                "후 사용할 수 있습니다",
-                "포인트 +"
-        ));
-        d.allowPatterns = new ArrayList<>(Arrays.asList(
-                "님께서"
-        ));
-        return d;
-    }
-
-    private static <T> T nullTo(T v, T def) { return v != null ? v : def; }
-    private static int clamp(int v, int min, int max) { return Math.max(min, Math.min(max, v)); }
-    private static float clampf(float v, float min, float max) { return Math.max(min, Math.min(max, v)); }
-    private static <T> List<T> pick(List<T> v, List<T> def) { return (v != null && !v.isEmpty()) ? v : def; }
-
-    // 저장용 DTO
-    static class Data {
-        Boolean enabled;
-        Float   fontScale;
-        Boolean bgEnabled;
-        Integer bgOpacityPercent;
-
-        Integer maxVisible;
-        Integer displayMillis;
-
-        List<String> systemPatterns;
-        List<String> allowPatterns;
+    /* ===== 유틸 ===== */
+    public static int argb(int a, int r, int g, int b) {
+        return (a & 0xff) << 24 | (r & 0xff) << 16 | (g & 0xff) << 8 | (b & 0xff);
     }
 }

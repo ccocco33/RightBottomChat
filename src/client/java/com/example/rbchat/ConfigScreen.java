@@ -3,32 +3,34 @@ package com.example.rbchat;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.SliderWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.client.gui.widget.ClickableWidget;
+import net.minecraft.client.gui.widget.*;
 import net.minecraft.text.Text;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 public class ConfigScreen extends Screen {
     private final Screen parent;
 
-    // 스크롤에 포함되는 컨트롤들 (전부 스크롤 대상!)
+    // 전부 스크롤 대상 (라이브 프리뷰 반영)
     private ButtonWidget toggleEnabledBtn;
     private ButtonWidget bgToggleBtn;
     private SimpleSlider  scaleSlider;
     private SimpleSlider  bgOpacitySlider;
 
-    private ButtonWidget saveBtn;
-    private ButtonWidget cancelBtn;
+    private SimpleSlider  offsetXSlider;
+    private SimpleSlider  offsetYSlider;
+    private SimpleSlider  edgePaddingSlider; // ← 가장자리 여백
+
+    private ButtonWidget applyBtn;
+    private ButtonWidget saveCloseBtn;
+    private ButtonWidget defaultsBtn;
 
     private static class Row {
         final TextFieldWidget field;
         final ButtonWidget    delBtn;
+        int lastLocalY;
         Row(TextFieldWidget f, ButtonWidget b) { this.field = f; this.delBtn = b; }
     }
 
@@ -40,22 +42,30 @@ public class ConfigScreen extends Screen {
     private TextFieldWidget maxVisibleField;
     private TextFieldWidget displayMillisField;
 
-    // 레이아웃 기준
     private int baseX;
     private int baseY;
 
-    // 스크롤 영역(가로는 고정, 세로만 스크롤)
-    private int viewportTop;         // 스크롤 시작 Y (== baseY)
-    private int viewportHeight;      // 스크롤 가능한 높이
-    private int scrollY = 0;         // 현재 스크롤 값
-    private int contentHeight = 0;   // 컨텐츠 총높이
-    private int contentWidthPx = 320; // 컨텐츠 최대 가로폭(스크롤바 기준) — 동적으로 계산
+    // 스크롤
+    private int viewportTop;
+    private int viewportHeight;
+    private int scrollY = 0;
+    private int contentHeight = 0;
 
-    // 라벨용 로컬Y 저장
-    private int lastTitleLocalY = 0;
-    private int lastSystemTitleLocalY = 0;
-    private int lastAllowTitleLocalY  = 0;
-    private int lastNumbersLocalY     = 0;
+    // 컨텐츠 폭(스크롤 기준)
+    private static final int CONTENT_W  = 320; // 고정 컨텐츠 폭
+    private int contentWidthPx = CONTENT_W;
+
+    // 반반 슬라이더 너비/간격 (320 = 155 + 10 + 155)
+    private static final int HALF_W   = 155;
+    private static final int HALF_GAP = 10;
+
+    // 라벨(로컬Y)
+    private int titleYLocal=0, sysLabelLocal=0, allowLabelLocal=0, numbersLocal=0;
+    private int posTitleLocal=0, padTitleLocal=0;
+
+    // 정규식 오류 UI
+    private Set<Integer> invalidSystemIdx = new HashSet<>();
+    private Set<Integer> invalidAllowIdx  = new HashSet<>();
 
     public ConfigScreen(Screen parent) {
         super(Text.literal("RBChat 설정"));
@@ -67,12 +77,11 @@ public class ConfigScreen extends Screen {
         baseX = this.width / 2 - 160;
         baseY = this.height / 6;
 
-        // 스크롤 영역을 화면 상단 기준으로 설정
         viewportTop = baseY;
         viewportHeight = this.height - viewportTop - 24;
 
-        // ===== 스크롤 대상 위젯 생성 (초기 위치는 임시, relayout에서 재배치) =====
-        toggleEnabledBtn = ButtonWidget.builder(Text.literal(labelEnabled()), btn -> {
+        /* ===== 상단 컨트롤 (라이브 프리뷰) ===== */
+        toggleEnabledBtn = ButtonWidget.builder(Text.literal(labelEnabled()), b -> {
             Config.enabled = !Config.enabled;
             toggleEnabledBtn.setMessage(Text.literal(labelEnabled()));
         }).dimensions(baseX, viewportTop, 120, 20).build();
@@ -80,10 +89,10 @@ public class ConfigScreen extends Screen {
 
         scaleSlider = new SimpleSlider(baseX + 130, viewportTop, 190, 20,
                 Text.literal("크기: "), Config.fontScale, 0.60f, 1.20f,
-                v -> Config.fontScale = v, this::formatScale);
+                v -> Config.fontScale = v, v -> String.format("%.2f×", v));
         addDrawableChild(scaleSlider);
 
-        bgToggleBtn = ButtonWidget.builder(Text.literal(labelBg()), btn -> {
+        bgToggleBtn = ButtonWidget.builder(Text.literal(labelBg()), b -> {
             Config.bgEnabled = !Config.bgEnabled;
             bgToggleBtn.setMessage(Text.literal(labelBg()));
         }).dimensions(baseX, viewportTop, 120, 20).build();
@@ -96,6 +105,29 @@ public class ConfigScreen extends Screen {
                 v -> (int)Math.round(v * 100) + "%");
         addDrawableChild(bgOpacitySlider);
 
+        // 위치/여백(라이브 적용) — X/Y를 반반 크기(HALF_W)로, 중앙 간격 HALF_GAP 유지
+        offsetXSlider = new SimpleSlider(baseX + 0, viewportTop, HALF_W, 20,
+                Text.literal("X 오프셋: "),
+                Config.offsetX, 0f, 200f,
+                v -> Config.offsetX = Math.round(v),
+                v -> String.valueOf(Math.round(v)));
+        addDrawableChild(offsetXSlider);
+
+        offsetYSlider = new SimpleSlider(baseX + HALF_W + HALF_GAP, viewportTop, HALF_W, 20,
+                Text.literal("Y 오프셋: "),
+                Config.offsetY, 0f, 200f,
+                v -> Config.offsetY = Math.round(v),
+                v -> String.valueOf(Math.round(v)));
+        addDrawableChild(offsetYSlider);
+
+        edgePaddingSlider = new SimpleSlider(baseX + 0, viewportTop, CONTENT_W, 20,
+                Text.literal("가장자리 여백(px): "),
+                Config.edgePadding, 0f, 32f,
+                v -> Config.edgePadding = Math.round(v),
+                v -> String.valueOf(Math.round(v)));
+        addDrawableChild(edgePaddingSlider);
+
+        /* ===== 리스트 초기화 ===== */
         systemRows.clear();
         allowRows.clear();
         if (Config.systemPatterns.isEmpty()) Config.systemPatterns.add("");
@@ -116,6 +148,7 @@ public class ConfigScreen extends Screen {
         }).dimensions(baseX + 260 + 4, viewportTop, 20, 20).build();
         addDrawableChild(addAllowBtn);
 
+        /* ===== 숫자 입력 ===== */
         maxVisibleField = new TextFieldWidget(this.textRenderer, baseX, viewportTop, 140, 20, Text.literal("maxVisible"));
         maxVisibleField.setText(String.valueOf(Config.maxVisible));
         addDrawableChild(maxVisibleField);
@@ -124,21 +157,58 @@ public class ConfigScreen extends Screen {
         displayMillisField.setText(String.valueOf(Config.displayMillis));
         addDrawableChild(displayMillisField);
 
-        saveBtn = ButtonWidget.builder(Text.literal("저장"), btn -> {
-            applyAndSave();
-            MinecraftClient.getInstance().setScreen(parent);
-        }).dimensions(baseX, viewportTop, 140, 20).build();
-        addDrawableChild(saveBtn);
+        /* ===== 하단 버튼 ===== */
+        applyBtn = ButtonWidget.builder(Text.literal("적용"), b -> {
+            applyFromWidgets(false);       // 디스크 저장 X
+            compileAndMarkErrors();        // 정규식 미리 컴파일 + 오류 표시
+        }).dimensions(baseX, viewportTop, 100, 20).build();
+        addDrawableChild(applyBtn);
 
-        cancelBtn = ButtonWidget.builder(Text.literal("취소"), btn -> {
+        saveCloseBtn = ButtonWidget.builder(Text.literal("저장 후 닫기"), b -> {
+            applyFromWidgets(true);        // 디스크 저장 O
+            compileAndMarkErrors();
             MinecraftClient.getInstance().setScreen(parent);
-        }).dimensions(baseX + 150, viewportTop, 170, 20).build();
-        addDrawableChild(cancelBtn);
+        }).dimensions(baseX + 110, viewportTop, 120, 20).build();
+        addDrawableChild(saveCloseBtn);
+
+        defaultsBtn = ButtonWidget.builder(Text.literal("기본값"), b -> {
+            Config.resetToDefaults();
+            resetUIFromConfig();
+            compileAndMarkErrors();
+        }).dimensions(baseX + 240, viewportTop, 80, 20).build();
+        addDrawableChild(defaultsBtn);
+
+        compileAndMarkErrors();
+        relayout();
+    }
+
+    private void resetUIFromConfig() {
+        for (Row r : new ArrayList<>(systemRows)) { remove(r.field); remove(r.delBtn); }
+        for (Row r : new ArrayList<>(allowRows))  { remove(r.field); remove(r.delBtn); }
+        systemRows.clear();
+        allowRows.clear();
+
+        if (Config.systemPatterns.isEmpty()) Config.systemPatterns.add("");
+        if (Config.allowPatterns.isEmpty())  Config.allowPatterns.add("");
+        for (String s : Config.systemPatterns) addSystemRow(s);
+        for (String s : Config.allowPatterns) addAllowRow(s);
+
+        toggleEnabledBtn.setMessage(Text.literal(labelEnabled()));
+        bgToggleBtn.setMessage(Text.literal(labelBg()));
+
+        scaleSlider.setValueFromReal(Config.fontScale);
+        bgOpacitySlider.setValueFromReal(Config.bgOpacityPercent / 100f);
+        offsetXSlider.setValueFromReal(Config.offsetX);
+        offsetYSlider.setValueFromReal(Config.offsetY);
+        edgePaddingSlider.setValueFromReal(Config.edgePadding);
+
+        maxVisibleField.setText(String.valueOf(Config.maxVisible));
+        displayMillisField.setText(String.valueOf(Config.displayMillis));
 
         relayout();
     }
 
-    // ===== Row 생성/삭제 =====
+    /* ===== Row 생성/삭제 ===== */
     private void addSystemRow(String val) {
         int rowW = 260, rowH = 20;
         final TextFieldWidget tf = new TextFieldWidget(this.textRenderer, baseX, viewportTop, rowW, rowH, Text.literal("system"));
@@ -147,7 +217,7 @@ public class ConfigScreen extends Screen {
 
         final Row[] holder = new Row[1];
         ButtonWidget del = ButtonWidget.builder(Text.literal("-"), b -> {
-            if (systemRows.size() <= 1) return; // 최소 1줄 보존
+            if (systemRows.size() <= 1) return;
             deleteSystemRow(holder[0]);
             relayout();
         }).dimensions(baseX + rowW + 4, viewportTop, 20, rowH).build();
@@ -157,10 +227,8 @@ public class ConfigScreen extends Screen {
         holder[0] = row;
         systemRows.add(row);
     }
-
     private void deleteSystemRow(Row row) {
-        this.remove(row.field);
-        this.remove(row.delBtn);
+        remove(row.field); remove(row.delBtn);
         systemRows.remove(row);
     }
 
@@ -172,7 +240,7 @@ public class ConfigScreen extends Screen {
 
         final Row[] holder = new Row[1];
         ButtonWidget del = ButtonWidget.builder(Text.literal("-"), b -> {
-            if (allowRows.size() <= 1) return; // 최소 1줄 보존
+            if (allowRows.size() <= 1) return;
             deleteAllowRow(holder[0]);
             relayout();
         }).dimensions(baseX + rowW + 4, viewportTop, 20, rowH).build();
@@ -182,108 +250,103 @@ public class ConfigScreen extends Screen {
         holder[0] = row;
         allowRows.add(row);
     }
-
     private void deleteAllowRow(Row row) {
-        this.remove(row.field);
-        this.remove(row.delBtn);
+        remove(row.field); remove(row.delBtn);
         allowRows.remove(row);
     }
 
-    // ===== 스크롤 재배치 =====
+    /* ===== 레이아웃 ===== */
     private void relayout() {
         int x = baseX;
         int localY = 0;
 
-        final int TITLE_LARGE  = 18; // 제목 줄 높이
-        final int CONTROL_GAP  = 6;  // 제목과 컨트롤 사이 여백
-        final int LINE_GAP     = 26; // 컨트롤 라인 간격
-        final int TITLE_SMALL  = 12; // 섹션 라벨 높이
-        final int ROW_SPACING  = 24; // 리스트 한 줄 간격
-        final int SECTION_GAP  = 16; // 섹션 사이 여백
+        final int TITLE_LARGE = 18;
+        final int CONTROL_GAP = 6;
+        final int LINE_GAP    = 26;
+        final int TITLE_SMALL = 12;
+        final int ROW_SPACE   = 24;
+        final int SECTION_GAP = 16;
 
-        // 제목(스크롤 포함)
-        int titleLocalY = localY;               // "사이드 HUD 필터링 옵션"
+        // 제목
+        titleYLocal = localY;
         localY += TITLE_LARGE + CONTROL_GAP;
 
-        // 1줄: 모드 토글 + 크기 슬라이더
+        // 1행: 모드, 크기
         place(toggleEnabledBtn, x, localY);
         place(scaleSlider,      x + 130, localY);
         localY += LINE_GAP;
 
-        // 2줄: 배경 토글 + 배경 투명도 슬라이더
-        place(bgToggleBtn,    x, localY);
-        place(bgOpacitySlider, x + 130, localY);
+        // 2행: 배경, 투명도
+        place(bgToggleBtn,     x,        localY);
+        place(bgOpacitySlider, x + 130,  localY);
         localY += LINE_GAP;
 
-        // system 라벨
-        int systemTitleLocalY = localY;
-        localY += TITLE_SMALL;
+        // ===== “채팅창 위치” 라벨 → 그 아래 X/Y 슬라이더(반반 크기) =====
+        posTitleLocal = localY;                    // 라벨 줄
+        localY += TITLE_SMALL + 4;                 // 라벨 높이 + 여백
+        place(offsetXSlider, x,                          localY);
+        place(offsetYSlider, x + HALF_W + HALF_GAP,      localY);
+        localY += LINE_GAP;
 
-        // system 리스트
+        // ===== “가장자리 여백(px)” 라벨 → 그 아래 전체폭 슬라이더 =====
+        padTitleLocal = localY;
+        localY += TITLE_SMALL + 4;
+        place(edgePaddingSlider, x, localY);
+        localY += LINE_GAP;
+
+        // system 섹션
+        sysLabelLocal = localY;
+        localY += TITLE_SMALL;
         int rowX = x, rowW = 260;
         for (int i = 0; i < systemRows.size(); i++) {
             Row r = systemRows.get(i);
-            int rowLocalY = localY + i * ROW_SPACING;
-            place(r.field,  rowX,            rowLocalY);
-            place(r.delBtn, rowX + rowW + 4, rowLocalY);
+            int y = localY + i * ROW_SPACE;
+            r.lastLocalY = y;
+            place(r.field,  rowX,            y);
+            place(r.delBtn, rowX + rowW + 4, y);
         }
-        localY += systemRows.size() * ROW_SPACING;
-
-        // + 시스템
+        localY += systemRows.size() * ROW_SPACE;
         place(addSystemBtn, rowX + rowW + 4, localY);
-
-        // 섹션 간 여백
         localY += SECTION_GAP;
 
-        // allow 라벨
-        int allowTitleLocalY = localY;
+        // allow 섹션
+        allowLabelLocal = localY;
         localY += TITLE_SMALL;
-
-        // allow 리스트
         for (int i = 0; i < allowRows.size(); i++) {
             Row r = allowRows.get(i);
-            int rowLocalY = localY + i * ROW_SPACING;
-            place(r.field,  rowX,            rowLocalY);
-            place(r.delBtn, rowX + rowW + 4, rowLocalY);
+            int y = localY + i * ROW_SPACE;
+            r.lastLocalY = y;
+            place(r.field,  rowX,            y);
+            place(r.delBtn, rowX + rowW + 4, y);
         }
-        localY += allowRows.size() * ROW_SPACING;
-
-        // + 허용
+        localY += allowRows.size() * ROW_SPACE;
         place(addAllowBtn, rowX + rowW + 4, localY);
 
-        // 숫자 입력(스크롤 포함)
+        // 숫자 입력
         localY += 24;
-        int numbersLocalY = localY;
-        place(maxVisibleField,   x,        numbersLocalY);
-        place(displayMillisField, x + 150, numbersLocalY);
+        numbersLocal = localY;
+        place(maxVisibleField,    x,        localY);
+        place(displayMillisField, x + 150,  localY);
 
-        // 저장/취소(스크롤 포함)
+        // 하단 버튼
         localY += 36;
-        place(saveBtn,   x,        localY);
-        place(cancelBtn, x + 150,  localY);
+        place(applyBtn,     x,         localY);
+        place(saveCloseBtn, x + 110,   localY);
+        place(defaultsBtn,  x + 240,   localY);
 
-        // 컨텐츠 높이 및 스크롤 보정
+        // 컨텐츠 크기 & 스크롤보정
         contentHeight = localY + 28;
         clampScroll();
 
-        // 컨텐츠 가로폭 계산(스크롤바 기준점)
-        // - 행: 260 + 4 + 20 = 284
-        // - 컨트롤/숫자: 오른쪽 끝이 x + 130 + 190 = x + 320 (숫자필드도 150+170=320)
+        // 컨텐츠 폭(스크롤바 기준) — 고정 320으로 유지
         int rowsWidth   = rowW + 4 + 20; // 284
-        int controlsW   = 130 + 190;     // 320
+        int controlsW   = CONTENT_W;     // 320로 고정
         int numbersW    = 150 + 170;     // 320
-        contentWidthPx  = Math.max(rowsWidth, Math.max(controlsW, numbersW)); // = 320
-
-        // 라벨용 로컬Y 저장
-        lastTitleLocalY       = titleLocalY;
-        lastSystemTitleLocalY = systemTitleLocalY;
-        lastAllowTitleLocalY  = allowTitleLocalY;
-        lastNumbersLocalY     = numbersLocalY;
+        contentWidthPx  = Math.max(rowsWidth, Math.max(controlsW, numbersW));
     }
 
     private void place(ClickableWidget w, int x, int localY) {
         w.setPosition(x, viewportTop + localY - scrollY);
-        // 폭은 생성 시 지정된 값 유지 (필요 시 setWidth 호출)
     }
 
     private void clampScroll() {
@@ -309,22 +372,27 @@ public class ConfigScreen extends Screen {
         super.resize(client, width, height);
         baseX = width / 2 - 160;
         baseY = height / 6;
-        viewportTop = baseY; // 상단 컨트롤도 스크롤 포함
+        viewportTop = baseY;
         viewportHeight = height - viewportTop - 24;
         clampScroll();
         relayout();
     }
 
-    private String labelEnabled() { return "모드: " + (Config.enabled ? "켜짐" : "꺼짐"); }
-    private String labelBg()      { return "배경: " + (Config.bgEnabled ? "켜짐" : "꺼짐"); }
-    private String formatScale(float v) { return String.format("%.2f×", v); }
-
-    private void applyAndSave() {
+    /* ===== 적용/저장 & 컴파일 ===== */
+    private void applyFromWidgets(boolean saveToDisk) {
         Config.systemPatterns = collectTexts(systemRows);
         Config.allowPatterns  = collectTexts(allowRows);
-        Config.maxVisible     = parseIntSafe(maxVisibleField.getText(), 10, 1, 40);
-        Config.displayMillis  = parseIntSafe(displayMillisField.getText(), 3000, 500, 20000);
-        Config.saveCurrent();
+
+        Config.maxVisible    = parseIntSafe(maxVisibleField.getText(), 10, 1, 40);
+        Config.displayMillis = parseIntSafe(displayMillisField.getText(), 3000, 500, 20000);
+
+        if (saveToDisk) Config.saveCurrent();
+    }
+
+    private void compileAndMarkErrors() {
+        Config.compilePatternsFromCurrent();
+        invalidSystemIdx = new HashSet<>(Config.invalidSystemIdx);
+        invalidAllowIdx  = new HashSet<>(Config.invalidAllowIdx);
     }
 
     private static List<String> collectTexts(List<Row> rows) {
@@ -350,24 +418,44 @@ public class ConfigScreen extends Screen {
         }
     }
 
+    private String labelEnabled() { return "모드: " + (Config.enabled ? "켜짐" : "꺼짐"); }
+    private String labelBg()      { return "배경: " + (Config.bgEnabled ? "켜짐" : "꺼짐"); }
+
+    /* ===== 렌더 ===== */
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
         renderBackground(ctx);
         int x = baseX;
 
-        // 제목/라벨(스크롤 적용)
-        int titleY = viewportTop + (lastTitleLocalY - scrollY);
-        ctx.drawText(textRenderer, "사이드 HUD 필터링 옵션", x, titleY, 0xFFFFFF, false);
+        ctx.drawText(textRenderer, "사이드 HUD 필터링 옵션", x, viewportTop + (titleYLocal - scrollY), 0xFFFFFF, false);
 
-        int sysLabelY = viewportTop + (lastSystemTitleLocalY - scrollY);
-        ctx.drawText(textRenderer, "숨길 패턴(system):", x, sysLabelY, 0xFFFFFF, false);
+        // 라벨들은 슬라이더 바로 위에 그려서 겹침 제거
+        ctx.drawText(textRenderer, "채팅창 위치",      x, viewportTop + (posTitleLocal - scrollY), 0xAAAAAA, false);
+        ctx.drawText(textRenderer, "가장자리 여백(px)", x, viewportTop + (padTitleLocal - scrollY), 0xAAAAAA, false);
 
-        int allowLabelY = viewportTop + (lastAllowTitleLocalY - scrollY);
-        ctx.drawText(textRenderer, "허용 패턴(allow):", x, allowLabelY, 0xFFFFFF, false);
+        ctx.drawText(textRenderer, "숨길 패턴(system):", x, viewportTop + (sysLabelLocal - scrollY), 0xFFFFFF, false);
+        ctx.drawText(textRenderer, "허용 패턴(allow):",  x, viewportTop + (allowLabelLocal - scrollY), 0xFFFFFF, false);
 
-        int numbersY = viewportTop + (lastNumbersLocalY - scrollY);
+        int numbersY = viewportTop + (numbersLocal - scrollY);
         ctx.drawText(textRenderer, "maxVisible",        x,        numbersY - 12, 0xAAAAAA, false);
         ctx.drawText(textRenderer, "displayMillis(ms)", x + 150,  numbersY - 12, 0xAAAAAA, false);
+
+        // 정규식 오류 경고
+        int warnColor = 0xFFDD5555;
+        for (int i = 0; i<systemRows.size(); i++) {
+            if (invalidSystemIdx.contains(i)) {
+                Row r = systemRows.get(i);
+                int yy = viewportTop + (r.lastLocalY - scrollY);
+                ctx.drawText(textRenderer, "정규식 오류", x + 260 + 28, yy + 6, warnColor, false);
+            }
+        }
+        for (int i = 0; i<allowRows.size(); i++) {
+            if (invalidAllowIdx.contains(i)) {
+                Row r = allowRows.get(i);
+                int yy = viewportTop + (r.lastLocalY - scrollY);
+                ctx.drawText(textRenderer, "정규식 오류", x + 260 + 28, yy + 6, warnColor, false);
+            }
+        }
 
         drawScrollbar(ctx);
         super.render(ctx, mouseX, mouseY, delta);
@@ -376,7 +464,6 @@ public class ConfigScreen extends Screen {
     private void drawScrollbar(DrawContext ctx) {
         if (contentHeight <= viewportHeight) return;
         int barW = 4;
-        // 스크롤 트랙은 "컨텐츠 최대 가로폭" 오른쪽에 그린다 → 컨텐츠가 트랙을 넘지 않음
         int trackX = baseX + contentWidthPx + 8;
         int trackY0 = viewportTop;
         int trackY1 = viewportTop + viewportHeight;
@@ -396,7 +483,7 @@ public class ConfigScreen extends Screen {
     @Override
     public boolean shouldPause() { return false; }
 
-    /* ===== 간단 슬라이더 위젯 ===== */
+    /* ===== 간단 슬라이더 ===== */
     private static class SimpleSlider extends SliderWidget {
         private final float min, max;
         private final Consumer<Float> apply;
@@ -413,9 +500,10 @@ public class ConfigScreen extends Screen {
             updateMessage();
         }
 
-        private void setValueFromReal(float real) {
+        void setValueFromReal(float real) {
             double norm = (real - min) / (max - min);
             this.value = Math.max(0.0, Math.min(1.0, norm));
+            updateMessage();
         }
 
         private float getReal() {
@@ -429,7 +517,7 @@ public class ConfigScreen extends Screen {
 
         @Override
         protected void applyValue() {
-            apply.accept(getReal());
+            apply.accept(getReal()); // 라이브 프리뷰: 즉시 Config 반영
         }
     }
 }
