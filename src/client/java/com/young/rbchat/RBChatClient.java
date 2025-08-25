@@ -1,4 +1,4 @@
-package com.example.rbchat;
+package com.young.rbchat;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;

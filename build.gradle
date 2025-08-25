@@ -2,9 +2,9 @@ plugins {
     id 'fabric-loom' version '1.6.12'
     id 'maven-publish'
 }
-
-group = project.maven_group
-version = project.mod_version
+group = project.findProperty("maven_group") ?: "com.young.rbchat"
+version = project.findProperty("mod_version") ?: "2.0.0"
+archivesBaseName = project.findProperty("archives_base_name") ?: "rbchat"
 
 repositories {
     mavenCentral()
@@ -33,9 +33,10 @@ loom {
     splitEnvironmentSourceSets()
 }
 
+// fabric.mod.json 안의 ${version} 치환
 processResources {
-    inputs.property "version", project.version
+    inputs.property "version", version
     filesMatching("fabric.mod.json") {
-        expand "version": project.version
+        expand "version": version
     }
 }

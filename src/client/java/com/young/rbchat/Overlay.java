@@ -1,4 +1,4 @@
-package com.example.rbchat;
+package com.young.rbchat;
 
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;

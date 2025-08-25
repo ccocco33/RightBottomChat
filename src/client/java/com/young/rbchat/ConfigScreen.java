@@ -1,4 +1,4 @@
-package com.example.rbchat;
+package com.young.rbchat;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;

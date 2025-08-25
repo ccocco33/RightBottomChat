@@ -1,4 +1,4 @@
-package com.example.rbchat;
+package com.young.rbchat;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;

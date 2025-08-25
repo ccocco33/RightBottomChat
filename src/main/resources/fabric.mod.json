@@ -8,8 +8,8 @@
   "license": "MIT",
   "environment": "client",
   "entrypoints": {
-    "client": [ "com.example.rbchat.RBChatClient" ],
-    "modmenu": [ "com.example.rbchat.ModMenuIntegration" ]
+    "client": [ "com.young.rbchat.RBChatClient" ],
+    "modmenu": [ "com.young.rbchat.ModMenuIntegration" ]
   },
   "icon": "assets/rbchat/icon.png",
   "depends": {
