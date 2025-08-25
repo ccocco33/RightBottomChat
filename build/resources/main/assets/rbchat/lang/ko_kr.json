@@ -1,5 +1,5 @@
 {
-  "modmenu.descriptionTranslation.rbchat": "보기 싫은 메시지를 HUD로 보내고 채팅창에선 숨겨요.",
+  "modmenu.descriptionTranslation.rbchat": "필요 없는 채팅을 오른쪽 하단으로 보내고 메인 채팅창에서는 숨깁니다.",
   "key.categories.rbchat": "RBChat",
   "key.rbchat.open_config": "RBChat 설정 열기"
 }

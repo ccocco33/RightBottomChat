@@ -1,12 +1,17 @@
 {
   "enabled": true,
   "fontScale": 0.9,
-  "bgEnabled": false,
+  "bgEnabled": true,
   "bgOpacityPercent": 30,
   "maxVisible": 10,
   "displayMillis": 3000,
+  "offsetX": 0,
+  "offsetY": 0,
+  "edgePadding": 8,
   "systemPatterns": [
-    "획득했습니다"
+    "획득했습니다",
+    "후 사용할 수 있습니다",
+    "포인트 \\+"
   ],
   "allowPatterns": [
     "님께서"

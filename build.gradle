@@ -3,39 +3,113 @@ plugins {
     id 'maven-publish'
 }
 
-group = project.maven_group
-version = project.mod_version
+group = project.findProperty("maven_group") ?: "com.young.rbchat"
+version = project.findProperty("mod_version") ?: "2.0.0"
+
+def mcVer   = project.findProperty("minecraft_version")     ?: "1.20.1"
+def yarn    = project.findProperty("yarn_mappings")         ?: "1.20.1+build.10"
+def fapi    = project.findProperty("fabric_api_version")    ?: "0.92.1+1.20.1"
+def loaderV = project.findProperty("fabric_loader_version") ?: "0.15.6"
 
 repositories {
     mavenCentral()
-    maven { url = 'https://maven.fabricmc.net/' }
-    maven { url = 'https://maven.terraformersmc.com/releases/' } // Mod Menu
+    maven { url "https://maven.fabricmc.net/" }
 }
 
 dependencies {
-    minecraft "com.mojang:minecraft:${minecraft_version}"
-    mappings "net.fabricmc:yarn:${yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+    minecraft "com.mojang:minecraft:${mcVer}"
+    mappings "net.fabricmc:yarn:${yarn}:v2"
 
-    // Mod Menu (선택 의존 — 개발/런타임에만)
-    modCompileOnly "com.terraformersmc:modmenu:7.2.2"
-    modRuntimeOnly  "com.terraformersmc:modmenu:7.2.2"
+    modImplementation "net.fabricmc:fabric-loader:${loaderV}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fapi}"
 }
 
 java {
-    toolchain { languageVersion = JavaLanguageVersion.of(17) }
     withSourcesJar()
+    toolchain {
+        def minor = (project.findProperty("minecraft_version") ?: "1.20.1").tokenize('.')[1] as int
+        def need21 = (minor >= 21)
+        languageVersion = JavaLanguageVersion.of(need21 ? 21 : 17)
+    }
 }
-
-loom {
-    // 클라/서버 소스셋 분리: 클라 전용 코드는 src/client/java 에 둡니다
-    splitEnvironmentSourceSets()
+tasks.withType(JavaCompile).configureEach {
+    def minor = (project.findProperty("minecraft_version") ?: "1.20.1").tokenize('.')[1] as int
+    def need21 = (minor >= 21)
+    options.release = need21 ? 21 : 17
 }
 
 processResources {
-    inputs.property "version", project.version
+    inputs.property "version", version
+    inputs.property "mcVer", mcVer
     filesMatching("fabric.mod.json") {
-        expand "version": project.version
+        expand "version": version, "mcVer": mcVer
     }
+}
+
+tasks.withType(Jar).configureEach {
+    archiveBaseName.set(project.findProperty('archives_base_name') ?: 'rbchat')
+    archiveVersion.set("${version}+mc${mcVer}")
+}
+
+/** ───────── 멀티 타깃 빌드 편의 태스크 (Exec 사용) ───────── */
+def targets = [
+        "1.20.1": [ yarn: "1.20.1+build.10", fapi: "0.92.1+1.20.1",  loader: "0.15.6"  ],
+        "1.20.4": [ yarn: "1.20.4+build.3",  fapi: "0.97.0+1.20.4",   loader: "0.15.6"  ],
+        "1.21.1": [ yarn: "1.21.1+build.2",  fapi: "0.99.5+1.21",  loader: "0.15.11" ],
+]
+
+def isWindows = System.getProperty("os.name").toLowerCase().contains("win")
+def gradlewCmd = isWindows ? "gradlew.bat" : "./gradlew"
+
+// 모든 빌드 결과물을 저장할 루트 디렉토리
+def outputDir = file("${buildDir}/dist")
+
+targets.each { ver, v ->
+    // 버전별 빌드 태스크 (clean 명령 제거)
+    tasks.register("build${ver.replace('.','')}", Exec) {
+        group = "multi"
+        description = "Build for Minecraft ${ver}"
+
+        def minor = (ver.tokenize('.')[1] as int)
+        def need21 = (minor >= 21)
+
+        def command = "build -Pminecraft_version=${ver} -Pyarn_mappings=${v.yarn} -Pfabric_api_version=${v.fapi} -Pfabric_loader_version=${v.loader}"
+
+        if (!isWindows) {
+            def prefix = need21 ? 'export JAVA_HOME=$(/usr/libexec/java_home -v 21); export PATH="$JAVA_HOME/bin:$PATH"; ' : ''
+            commandLine "bash", "-lc", "${prefix}${gradlewCmd} ${command}"
+        } else {
+            commandLine gradlewCmd, "build", "-Pminecraft_version=${ver}", "-Pyarn_mappings=${v.yarn}", "-Pfabric_api_version=${v.fapi}", "-Pfabric_loader_version=${v.loader}"
+        }
+    }
+
+    // 빌드 후 JAR 파일을 전용 폴더로 복사하는 태스크
+    def buildTask = tasks.named("build${ver.replace('.','')}")
+    tasks.register("copy${ver.replace('.','')}", Copy) {
+        group = "multi"
+        description = "Copies the built JAR for Minecraft ${ver} to a dedicated folder."
+
+        // 해당 버전 빌드 태스크가 먼저 실행되도록 의존성 설정
+        dependsOn buildTask
+
+        // 복사할 파일 지정 (리맵핑된 JAR 파일)
+        from(file("${buildDir}/libs")) {
+            include "*.jar"
+        }
+
+        // 복사할 디렉토리 (버전별로 구분)
+        into file("${outputDir}/${ver}")
+
+        // 복사 후 원본 파일 삭제
+        doLast {
+            delete fileTree("${buildDir}/libs").include("*.jar")
+        }
+    }
+}
+
+// 한번에 모든 버전 빌드 및 복사
+tasks.register("buildAll") {
+    group = "multi"
+    description = "Build and copy all target versions to the build/dist folder."
+    dependsOn tasks.matching { it.name.startsWith("copy") }
 }
